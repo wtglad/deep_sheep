@@ -14,6 +14,7 @@ import math
 from PIL import Image, ExifTags, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import exifread
+from shutil import copyfile, move
 
 # Set random number seed
 np.random.seed(0)
@@ -55,7 +56,9 @@ def get_images_in_dir(directory):
 	image_df = image_df.reset_index(drop=True)
 
 	corrupted_files_df = pd.DataFrame(corrupted_files)
-	corrupted_files_df.to_csv('corrupted_files.csv', index=False)
+
+	if len(corrupted_files_df) > 0: 
+		corrupted_files_df.to_csv('corrupted_files.csv', index=False)
 
 	return image_df
 
@@ -71,8 +74,8 @@ def load_image(img_path):
 
 
 
-# Make predictions for given image based number of MC runs requested or otherwise stop early if variance is low enough
-def classify_image(loaded_image, model, MC_runs, early_MC_stopping_enabled=True):
+# Make predictions for given image based number of MC runs requested 
+def classify_image(loaded_image, model, MC_runs, sheep_probability_threshold, non_sheep_probability_threshold, variance_threshold):
 
 	# Run MC predictions
 	MC_predictions = []
@@ -80,22 +83,26 @@ def classify_image(loaded_image, model, MC_runs, early_MC_stopping_enabled=True)
 
 		MC_predictions.append(model.predict(loaded_image)[0][0])
 
-		# Stop MC iterations early if variance in first 3 predictions is low enough or converges early
-		if early_MC_stopping_enabled and len(MC_predictions) >=  3 and iqr(MC_predictions) < 0.01:
-			break
-
 	# Save image stats
 	sheep_probability = np.mean(MC_predictions)
 	prediction_var = np.var(MC_predictions)
 	prediction_iqr = iqr(MC_predictions)
 
-	return sheep_probability, prediction_var, prediction_iqr
+
+	if sheep_probability >= sheep_probability_threshold and prediction_var <= variance_threshold:
+		label = 'sheep'
+	elif sheep_probability <= non_sheep_probability_threshold and prediction_var <= variance_threshold:
+		label = 'non_sheep'
+	else:
+		label = 'need_review'
+
+	return sheep_probability, prediction_var, prediction_iqr, label
 
 
 
 # Flow for classifying all images in target directory and exporting results
 # First pass prior to segmentation and sorting files
-def classify_dir(target_directory, target_dir_img_df, model_path, MC_runs, output_file, progress_file, probability_threshold):
+def classify_dir(target_directory, target_dir_img_df, model_path, MC_runs, output_file, progress_file, sheep_probability_threshold, non_sheep_probability_threshold, variance_threshold):
 	
 	if len(target_dir_img_df.columns) == 4:
 		# Need placeholders for model results
@@ -124,13 +131,14 @@ def classify_dir(target_directory, target_dir_img_df, model_path, MC_runs, outpu
 				#load_success = True 
 
 				# Get predictions for image
-				p_sheep, pred_var, pred_iqr = classify_image(loaded_image, model, MC_runs)
+				p_sheep, pred_var, pred_iqr, img_label = classify_image(loaded_image, model, MC_runs, sheep_probability_threshold, non_sheep_probability_threshold, variance_threshold)
 
 				# Save image data
 				index = target_dir_img_df[target_dir_img_df['full_path'] == img_path].index
 				target_dir_img_df.loc[index, 'sheep_probability'] = p_sheep
 				target_dir_img_df.loc[index, 'pred_var'] = pred_var
 				target_dir_img_df.loc[index, 'pred_iqr'] = pred_iqr
+				target_dir_img_df.loc[index, 'prediction'] = img_label
 
 				# Save intermediary temp file every 100 files 
 				if index % 100 == 0:
@@ -139,10 +147,8 @@ def classify_dir(target_directory, target_dir_img_df, model_path, MC_runs, outpu
 
 			except Exception: 
 				
-				# There are enough filters that by now this should only be corrupted files of size > 0	
 				continue
 
-	target_dir_img_df['prediction'] = target_dir_img_df['sheep_probability'].apply(lambda x: 1 if x >= probability_threshold else 0)
 
 	return target_dir_img_df
 
@@ -188,7 +194,6 @@ def initial_time_group_segmentation(img_df, group_interval):
 		
 
 		if group != None:
-			
 			group_df = img_df[img_df['time_group'] == group]
 			
 			if len(group_df) > 0:
@@ -209,10 +214,7 @@ def initial_time_group_segmentation(img_df, group_interval):
 		
 
 	# If image is alone, then just assign group based on timestamp 
-
 	img_df.loc[img_df[img_df['time_group'].isnull()].index, 'time_group'] = img_df[img_df['time_group'].isnull()]['timestamp'].apply(lambda x: x.strftime('%Y%m%d_%H%M'))
-
-
 
 
 	return img_df[['parent_dir', 'full_path', 'filename', 'timestamp','time_group', 'sheep_probability', 'pred_var', 'pred_iqr', 'prediction']]
@@ -288,8 +290,18 @@ def long_group_segmentation(df):
 	return df 
 
 
+def classify_group(p_sheep, num_files, need_review, sheep, need_review_group_threshold, sheep_threshold):
+	if need_review > need_review_group_threshold:
+		return 'need_review'
+	elif (sheep > sheep_threshold) or (p_sheep >= 0.1 and num_files > 5) or (p_sheep > 0.2):
+		return 'sheep'
+	elif (p_sheep < 0.1 and num_files > 5) or (p_sheep < 0.05):
+		return 'non_sheep'
+	else:
+		return 'need_review'
 
-def group_segmentation(images_df, group_interval):
+
+def group_segmentation(images_df, group_interval, long_group_threshold, sheep_group_threshold, need_review_group_threshold):
 	print('\n \n Running group segmentation...')
 
 
@@ -307,8 +319,8 @@ def group_segmentation(images_df, group_interval):
 
 	group_summary['group_duration'] = group_summary['max_timestamp'] - group_summary['min_timestamp']
 
-	# If duration >= 2 hours flag as long group and run long group segmentation 	
-	group_summary['long_group'] = group_summary['group_duration'].apply(lambda x: 1 if x >= pd.Timedelta(hours=2) else 0)
+	# If duration >= 30 min flag as long group and run long group segmentation 	
+	group_summary['long_group'] = group_summary['group_duration'].apply(lambda x: 1 if x >= pd.Timedelta(minutes=long_group_threshold) else 0)
 
 	segmented_df = initial_segmentation[initial_segmentation['time_group'].isin(group_summary[group_summary['long_group'] == 0]['time_group'])]
 
@@ -317,22 +329,48 @@ def group_segmentation(images_df, group_interval):
 		long_group_df = initial_segmentation[initial_segmentation['time_group'] == group]
 		segmented_df = segmented_df.append(long_group_segmentation(long_group_df), ignore_index=True)
 
-	return segmented_df
+	segmented_df['sheep_probability'] = segmented_df['sheep_probability'].astype(float)
+
+	# Calculate average probability for group aND number/percentage of predicted labels in each group
+	gdf = segmented_df.groupby('time_group').agg({'sheep_probability':'mean', 'filename':'size'})
+	gdf.columns = ['group_avg_p_sheep', 'num_files']
+
+	pivot_df = pd.pivot_table(segmented_df, index='time_group', columns='prediction', aggfunc='size')	
+	for i in ['need_review', 'sheep', 'non_sheep']:
+		if i not in pivot_df.columns.tolist():
+			pivot_df[i] = None
+
+	pivot_df = pivot_df[['need_review', 'non_sheep', 'sheep']]
+
+	gdf = gdf.merge(pivot_df, left_index=True, right_index=True).fillna(0)
+	for i in ['need_review', 'non_sheep', 'sheep']:
+		gdf['percent_' + i] = gdf[i] / gdf['num_files']
+
+	gdf = gdf.reset_index()
+	gdf['predicted_group_label'] = gdf.apply(lambda x: classify_group(x['group_avg_p_sheep'], x['num_files'], x['percent_need_review'], x['percent_sheep'], need_review_group_threshold, sheep_group_threshold), axis=1)
+
+	# Merge with segmented image dataframe
+	segmented_df = segmented_df.merge(gdf[['time_group', 'predicted_group_label']], on='time_group')
+
+	return segmented_df, gdf
 
 
 
-
-def sort_files(images_df):
-	print('\n \n Sorting files')
+def sort_files(images_df, sort_directory=None, sort_in_place=False):
 	
+	print('\n \n Sorting files...')
 	
+	if not sort_in_place:
+		images_df[['time_group', 'predicted_group_label']].drop_duplicates().apply(lambda x: os.makedirs(sort_directory + '/' + x['predicted_group_label'] + '/' + x['time_group'], exist_ok=True), axis=1)
+		images_df.apply(lambda x: copyfile(x['full_path'], sort_directory + '/' + x['predicted_group_label'] + '/' + x['time_group'] + '/' + x['filename']), axis=1)
+	
+	else:
+		images_df[['parent_dir', 'time_group', 'predicted_group_label']].drop_duplicates().apply(lambda x: os.makedirs(str(x['parent_dir']) + '/' + x['predicted_group_label'] + '/' + x['time_group'], exist_ok=True), axis=1)
+		images_df.apply(lambda x: move(x['full_path'], str(x['parent_dir']) + '/' + x['predicted_group_label'] + '/' + x['time_group'] + '/' + x['filename']), axis=1)
 
 
 def export_img_df(images_df, output_filename):
-	# Confirm file name is valid
-	if not str(output_filename).endswith('.csv'):
-		output_filename = output_filename + '.csv'
-
+	
 	# Export dataframe
 	print('\n \n Exporting to %s'%(output_filename))
 	images_df.to_csv(output_filename, index=False)

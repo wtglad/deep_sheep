@@ -10,7 +10,7 @@ parser.add_argument('sort_dir', type=str, help='Directory to run classification 
 parser.add_argument('output_file', type=str, help='File for exporting results')
 parser.add_argument('-MC_runs', type=int, default=10, help='Number of Monte Carlo runs for each image for uncertainty quantification')
 parser.add_argument('-saved_progress_file', default=None, type=str, help='File of saved progress due to previous run / early terminated job')
-parser.add_argument('-group_segmentation', type=bool, default=False, help='Toggles running group segmentation - default is False')
+parser.add_argument('-group_segmentation', type=bool, default=True, help='Toggles running group segmentation - default is True. Turning this off will break sorting.')
 parser.add_argument('-sort_files', type=bool, default=False, help='Toggles reorganizing files - default is False')
 parser.add_argument('-destination_dir', type=str, default=None, help='Location to move time sorted groups')
 parser.add_argument('-sort_in_place', type=bool, default=False, help='Whether to sort files in place or copy to destination directory.')

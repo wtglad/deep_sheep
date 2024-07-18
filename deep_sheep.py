@@ -6,18 +6,31 @@ import numpy as np
 from progressbar import ProgressBar
 from pathlib import Path
 from scipy.stats import iqr
-from keras.preprocessing import image
-from keras.models import load_model
-from keras.applications.xception import preprocess_input
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications import xception
+from tensorflow.keras.layers import Dense,GlobalAveragePooling2D, Dropout
+# from keras.models import load_model
+from tensorflow.python.keras.models import load_model
+from tensorflow.keras.applications.xception import preprocess_input
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 import pandas as pd
 import math
 from PIL import Image, ExifTags, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import exifread
 from shutil import copyfile, move
+import tensorflow as tf 
 
 # Set random number seed
 np.random.seed(0)
+
+
+def get_dropout(input_tensor, p=0.25, mc=False):
+    if mc:
+        return Dropout(p)(input_tensor, training=True)
+    else:
+        return Dropout(p)(input_tensor)
 
 # Get the list of all JPG files in target directory tree at given path   
 def get_images_in_dir(directory):
@@ -77,6 +90,7 @@ def load_image(img_path):
 # Make predictions for given image based number of MC runs requested 
 def classify_image(loaded_image, model, MC_runs, sheep_probability_threshold, non_sheep_probability_threshold, variance_threshold):
 
+
 	# Run MC predictions
 	MC_predictions = []
 	for i in range(MC_runs): 
@@ -111,8 +125,21 @@ def classify_dir(target_directory, target_dir_img_df, model_path, MC_runs, outpu
 		target_dir_img_df['pred_iqr'] = None
 
 	# Load model
+
 	print('\n \n Loading model... \n')
-	model = load_model(model_path)
+	# model = load_model(model_path)
+	base_model = xception.Xception(weights='imagenet',include_top=False)
+	x=base_model.output
+	x=GlobalAveragePooling2D()(x)
+	x=Dense(1024,activation='relu')(x) #we add dense layers so that the model can learn more complex functions and classify for better results.
+	x=Dense(1024,activation='relu')(x) #dense layer 2
+	x = get_dropout(x, p=0.25, mc=True)
+	x=Dense(1024,activation='relu')(x) #dense layer 3
+	x = get_dropout(x, p=0.25, mc=True)
+	x=Dense(512,activation='relu')(x) #dense layer 4
+	preds=Dense(1,activation='sigmoid')(x) #final layer with sigmoid activation to try and calibrate probabilities
+	model=Model(inputs=base_model.input,outputs=preds)
+	model.load_weights(model_path)
 
 	# Run predictions on target directory images
 	print('\n \n Running predictions on %s using %s' %(target_directory, model_path))

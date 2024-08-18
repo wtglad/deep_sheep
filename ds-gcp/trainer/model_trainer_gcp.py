@@ -52,6 +52,7 @@ copy_training_data_command = ['gsutil', '-m', 'cp', '-r', training_directory, '.
 run_command(copy_training_data_command)
 
 
+# Prep training dataset 
 training_directory = training_directory.split('/')[-1]
 
 train_datagen=ImageDataGenerator(vertical_flip=True, rotation_range=45,
@@ -64,7 +65,7 @@ train_generator=train_datagen.flow_from_directory(Path(training_directory),
                                                  class_mode='binary',
                                                  shuffle=True)
 
-
+# Initialize model
 # Due to issues with arguments across tensorflow versions, 
 #   we build the base model architecture and then populate it with weights (if desired) instead of serializing. 
 base_model = Xception(weights='imagenet',include_top=False)
@@ -81,11 +82,14 @@ model=Model(inputs=base_model.input,outputs=preds)
 
 if train_from_base_model: 
 	
+	# Fetch from cloud bucket
 	copy_model_command = ['gsutil', '-m', 'cp', '-r', base_trained_model, '.']
 	run_command(copy_model_command)
 	
+	# Load weights 
 	base_trained_model = base_trained_model.split('/')[-1]
-	model = Model.load_weights(base_trained_model)
+	print(f'Loading base_trained_model, {base_trained_model}')
+	model.load_weights(Path(base_trained_model))
 
 # Make last layers of model trainable
 for layer in model.layers[:-20]:
@@ -93,10 +97,12 @@ for layer in model.layers[:-20]:
 for layer in model.layers[-20:]:
     layer.trainable=True
 
+# Compile model
 model.compile(optimizer='Adam',loss='binary_crossentropy',metrics=['accuracy'])
 
 step_size_train=train_generator.n//train_generator.batch_size
 
+# Train model 
 model.fit(train_generator,
        steps_per_epoch=step_size_train,
        verbose=1,
@@ -106,7 +112,7 @@ model.fit(train_generator,
        class_weight={0:1, 1:3})
 
 
-
+# Save model and push back to GCS
 model.save(Path(output_model))
 
 copy_saved_model_command = ['gsutil', '-m', 'cp', '-r', output_model, 'gs://deep-sheep-trained-models/']

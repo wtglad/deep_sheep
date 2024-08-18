@@ -85,7 +85,7 @@ if train_from_base_model:
 	run_command(copy_model_command)
 	
 	base_trained_model = base_trained_model.split('/')[-1]
-	model = load_weights(base_trained_model)
+	model = Model.load_weights(base_trained_model)
 
 # Make last layers of model trainable
 for layer in model.layers[:-20]:

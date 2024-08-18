@@ -89,7 +89,7 @@ if train_from_base_model:
 	# Load weights 
 	base_trained_model = base_trained_model.split('/')[-1]
 	print(f'Loading base_trained_model, {base_trained_model}')
-	model = Model.load_weights(Path(base_trained_model))
+	model.load_weights(Path(base_trained_model))
 
 # Make last layers of model trainable
 for layer in model.layers[:-20]:

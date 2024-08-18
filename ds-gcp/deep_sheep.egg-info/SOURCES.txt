@@ -1,0 +1,7 @@
+setup.py
+deep_sheep.egg-info/PKG-INFO
+deep_sheep.egg-info/SOURCES.txt
+deep_sheep.egg-info/dependency_links.txt
+deep_sheep.egg-info/top_level.txt
+trainer/__init__.py
+trainer/model_trainer_gcp.py

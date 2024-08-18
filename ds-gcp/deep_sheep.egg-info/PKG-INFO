@@ -1,0 +1,5 @@
+Metadata-Version: 2.1
+Name: deep_sheep
+Version: 0.1
+Summary: Custom training package for DeepSheep on Vertex AI.
+Author: Will Glad
